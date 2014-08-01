@@ -198,8 +198,13 @@ class QuickBooks_Driver_Sql_Mssql extends QuickBooks_Driver_Sql
 	 * @var array 
 	 */
 	protected $_hooks;
-	
-	/**
+
+    /**
+     * @var \PDO
+     */
+    private $conn;
+
+    /**
 	 * Create a new Microsoft SQL Server back-end driver
 	 * 
 	 * @param string $dsn		A DSN-style connection string (i.e.: "mysql://your-mysql-username:your-mysql-password@your-mysql-host:port/your-mysql-database")
@@ -311,19 +316,7 @@ class QuickBooks_Driver_Sql_Mssql extends QuickBooks_Driver_Sql
 	 */
 	protected function _connect($host, $port, $user, $pass, $db, $new_link, $client_flags)
 	{
-		mssql_min_message_severity(QUICKBOOKS_DRIVER_SQL_MSSQL_MESSAGE_LEVEL);
-		mssql_min_error_severity(QUICKBOOKS_DRIVER_SQL_MSSQL_ERROR_LEVEL);
-		
-		if ($port)
-		{
-			$this->_conn = mssql_connect($host, $user, $pass, $new_link) or die('host: ' . $host . ', user: ' . $user . ', pass: ' . $pass . ' mysql_error(): ' . mssql_get_last_message());
-		}
-		else
-		{
-			$this->_conn = mssql_connect($host . ':' . $port, $user, $pass, $new_link) or die('host: ' . $host . ', user: ' . $user . ', pass: ' . $pass . ' mysql_error(): ' . mssql_get_last_message());
-		}
-		
-		return mssql_select_db($db, $this->_conn);
+        $this->conn = new PDO('sqlsrv:server='.$host.';Database='.$db, $user, $pass);
 	}
 	
 	/**
@@ -334,8 +327,13 @@ class QuickBooks_Driver_Sql_Mssql extends QuickBooks_Driver_Sql
 	 */
 	protected function _fetch($res)
 	{
-		$arr = mssql_fetch_assoc($res);
-		
+        /** @var \PDOStatement $res */
+		$arr = $res->fetch(\PDO::FETCH_ASSOC);
+
+        if (false === $arr) {
+            return;
+        }
+
 		// What's going on with this...? 
 		foreach ($arr as $key => $value)
 		{
@@ -356,7 +354,7 @@ class QuickBooks_Driver_Sql_Mssql extends QuickBooks_Driver_Sql
 		if ($limit)
 		{
 			$sql = str_replace(array( "SELECT ", "SELECT\n", "SELECT\r" ), 'SELECT TOP ' . (int) $limit . ' ' . "\n", $sql);
-			
+
 			/*
 select * from (
  select top 10 emp_id,lname,fname from (
@@ -364,39 +362,38 @@ select * from (
     from employee
    order by lname asc
  ) as newtbl order by lname desc
-) as newtbl2 order by lname asc			
+) as newtbl2 order by lname asc
 			*/
-			
+
 			if ($offset)
 			{
-				
+
 			}
 			else
 			{
-				
+
 			}
 		}
 		else if ($offset)
 		{
 			// @todo Does this need to be implemented...?
 		}
-		
-		$res = mssql_query($sql, $this->_conn);
-		
+
+		$res = $this->conn->query($sql);
 		if (!$res)
 		{
 			$errnum = 1;
-			$errmsg = mssql_get_last_message();
-			
+			$errmsg = $this->conn->errorInfo();
+
 			//print($sql);
-			
-			trigger_error('Error: ' . $errmsg . "\n" . 'SQL: ' . $sql, E_USER_ERROR);
+
+			trigger_error('Error: ('.$errmsg[1].')' . $errmsg[2] . "\n" . 'SQL: ' . $sql, E_USER_ERROR);
 			return false;
 		}
-		
+
 		return $res;
 	}
-	
+
 	/**
 	 * Issue a query to the SQL server
 	 * 
@@ -509,7 +506,8 @@ select * from (
 	 */
 	protected function _count($res)
 	{
-		return mssql_num_rows($res);
+        /** @var \PDOStatement $res */
+        return $res->rowCount();
 	}
 	
 	/**
@@ -734,6 +732,28 @@ select * from (
 				return $table;
 		}
 	}
+
+    protected function _generateCreateTable($name, $arr, $primary = array(), $keys = array(), $uniques = array(), $if_not_exists = true)
+    {
+        $sql = '';
+
+        foreach ($arr as $field => $def)
+        {
+            $sql .= "\t" . $this->_generateFieldSchema($field, $def) . ', ' . "\n";
+        }
+
+        if ($if_not_exists) {
+            return array(
+                "IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='".$name."' AND xtype='U')
+                    CREATE TABLE " . $name . ' ( ' . "\n" . substr($sql, 0, -3) . ' )
+                ',
+            );
+        } else {
+            return array(
+                'CREATE TABLE ' . $name . ' ( ' . "\n" . substr($sql, 0, -3) . ' ); ',
+            );
+        }
+    }
 	
 	protected function _mapSalt($salt)
 	{
